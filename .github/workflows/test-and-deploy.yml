@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 env:
-  REGISTRY: ghcr.io                          # или docker.io
+  REGISTRY: ghcr.io
   IMAGE_NAME_AQUA: ${{ github.repository }}/aqua
   IMAGE_NAME_NOTIFY: ${{ github.repository }}/notify
 
@@ -16,7 +16,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     services:
-      # Поднимаем PostgreSQL для тестов
       postgres:
         image: postgres:15-alpine
         env:
@@ -28,33 +27,30 @@ jobs:
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        pip install -r requirements.txt
-        pip install pytest pytest-asyncio httpx
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
 
-    # Пока автотестов нет, просто проверяем, что приложение импортируется и эндпоинт /health отвечает
-    - name: Smoke test
-      env:
-        DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
-        NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
-      run: |
-        # Запускаем оба сервиса в фоне
-        uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
-        sleep 5
-        uvicorn n_main:app --host 0.0.0.0 --port 8001 &
-        sleep 3
-        # Проверяем health
-        curl -f http://localhost:8000/health
-        curl -f http://localhost:8001/health
-        echo "Smoke test passed"
+      - name: Smoke test
+        env:
+          DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
+          NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
+        run: |
+          uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
+          sleep 5
+          uvicorn n_main:app --host 0.0.0.0 --port 8001 &
+          sleep 3
+          curl -f http://localhost:8000/health
+          curl -f http://localhost:8001/health
+          echo "Smoke test passed"
 
   # ========== Сборка Docker-образов ==========
   build:
@@ -66,30 +62,30 @@ jobs:
       packages: write
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Build and push AquaControl image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: Dockerfile.aqua          # нужен отдельный Dockerfile (см. ниже)
-        push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_AQUA }}:latest
+      - name: Build and push AquaControl image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.aqua
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_AQUA }}:latest
 
-    - name: Build and push Notification image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: Dockerfile.notify
-        push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_NOTIFY }}:latest
+      - name: Build and push Notification image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.notify
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_NOTIFY }}:latest
 
   # ========== Деплой на сервер ==========
   deploy:
@@ -97,19 +93,14 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-    - name: Deploy via SSH
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{ secrets.SSH_HOST }}
-        username: ${{ secrets.SSH_USER }}
-        key: ${{ secrets.SSH_KEY }}
-        script: |
-          cd /opt/aquacontrol
-          docker compose pull
-          docker compose up -d --remove-orphans
-          docker system prune -f
-        script: |
-          cd /opt/aquacontrol
-          git pull origin main
-          docker-compose down
-          docker-compose up -d --build
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd /opt/aquacontrol
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker system prune -f
