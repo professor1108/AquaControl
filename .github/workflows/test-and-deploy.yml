@@ -36,7 +36,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r aquacontrol/requirements.txt
+          pip install -r notifications/requirements.txt
           pip install pytest pytest-asyncio httpx
 
       - name: Smoke test
@@ -44,10 +45,15 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
           NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
         run: |
+          # Запускаем основной сервис
+          cd aquacontrol
           uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
-          sleep 5
+          cd ..
+          # Запускаем микросервис уведомлений
+          cd notifications
           uvicorn n_main:app --host 0.0.0.0 --port 8001 &
-          sleep 3
+          cd ..
+          sleep 5
           curl -f http://localhost:8000/health
           curl -f http://localhost:8001/health
           echo "Smoke test passed"
@@ -74,16 +80,16 @@ jobs:
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: Dockerfile.aqua
+          context: ./aquacontrol            # контекст - папка aquacontrol
+          file: aquacontrol/Dockerfile      # Dockerfile внутри aquacontrol
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_AQUA }}:latest
 
       - name: Build and push Notification image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: Dockerfile.notify
+          context: ./notifications
+          file: notifications/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_NOTIFY }}:latest
 
