@@ -8,8 +8,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME_AQUA: ${{ github.repository }}-aqua        # строчные буквы гарантируем в шаге lower
-  IMAGE_NAME_NOTIFY: ${{ github.repository }}-notify
 
 jobs:
   # 1. Тестирование
@@ -36,9 +34,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # основной сервис
           pip install -r requirements.txt
-          # микросервис уведомлений (если у него свой requirements, иначе можно объединить)
           pip install -r notifications/requirements.txt
           pip install pytest pytest-asyncio httpx
 
@@ -47,9 +43,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
           NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
         run: |
-          # запускаем основной сервис (лежит в корне)
           uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
-          # запускаем микросервис из папки notifications
           cd notifications && uvicorn n_main:app --host 0.0.0.0 --port 8001 &
           cd ..
           sleep 5
@@ -57,7 +51,7 @@ jobs:
           curl -f http://localhost:8001/health
           echo "Smoke test passed"
 
-  # 2. Сборка и публикация образов + деплой
+  # 2. Сборка и публикация образов
   build-and-deploy:
     needs: test
     if: github.ref == 'refs/heads/main'
@@ -65,6 +59,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}        # останутся пустыми, если секреты не заданы
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}
 
     steps:
       - uses: actions/checkout@v4
@@ -86,28 +84,29 @@ jobs:
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: .                           # корень репозитория
-          file: Dockerfile.aqua                # Dockerfile для основного сервиса
+          context: .
+          file: Dockerfile.aqua
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
 
       - name: Build and push Notification image
         uses: docker/build-push-action@v5
         with:
-          context: ./notifications             # папка notifications
-          file: notifications/Dockerfile        # Dockerfile для уведомлений
+          context: ./notifications
+          file: notifications/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
 
       - name: Deploy via SSH
-        if: ${{ secrets.SSH_HOST != '' }}      # выполнится только если задан секрет
+        if: ${{ env.SSH_HOST != '' }}          # выполняется только если задан секрет
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
           script: |
             cd /opt/aquacontrol
             docker compose pull
             docker compose up -d --remove-orphans
+            docker system prune -f
             docker system prune -f
