@@ -8,11 +8,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME_AQUA: ${{ github.repository }}/aqua
-  IMAGE_NAME_NOTIFY: ${{ github.repository }}/notify
+  # Эти переменные будут переопределены в шаге "Lowercase repo name"
+  IMAGE_NAME_AQUA: placeholder
+  IMAGE_NAME_NOTIFY: placeholder
 
 jobs:
-  # ========== Тестирование ==========
   test:
     runs-on: ubuntu-latest
     services:
@@ -45,11 +45,9 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
           NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
         run: |
-          # Запускаем основной сервис
           cd aquacontrol
           uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
           cd ..
-          # Запускаем микросервис уведомлений
           cd notifications
           uvicorn n_main:app --host 0.0.0.0 --port 8001 &
           cd ..
@@ -58,8 +56,7 @@ jobs:
           curl -f http://localhost:8001/health
           echo "Smoke test passed"
 
-  # ========== Сборка Docker-образов ==========
-  build:
+  build-and-deploy:
     needs: test
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -69,6 +66,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Lowercase repo name and set image names
+        id: lower
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME_AQUA=${REPO_LOWER}/aqua" >> $GITHUB_ENV
+          echo "IMAGE_NAME_NOTIFY=${REPO_LOWER}/notify" >> $GITHUB_ENV
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
@@ -80,8 +84,8 @@ jobs:
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: ./aquacontrol            # контекст - папка aquacontrol
-          file: aquacontrol/Dockerfile      # Dockerfile внутри aquacontrol
+          context: ./aquacontrol
+          file: aquacontrol/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_AQUA }}:latest
 
@@ -93,12 +97,7 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_NOTIFY }}:latest
 
-  # ========== Деплой на сервер ==========
-  deploy:
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
+      # Деплой (опционально, если не нужен – удалите следующие шаги)
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.0
         with:
