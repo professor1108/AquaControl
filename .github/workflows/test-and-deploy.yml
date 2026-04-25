@@ -33,7 +33,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r aquacontrol/requirements.txt
           pip install -r notifications/requirements.txt
           pip install pytest pytest-asyncio httpx
 
@@ -42,8 +42,11 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
           NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
         run: |
+          cd aquacontrol
           uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
-          cd notifications && uvicorn n_main:app --host 0.0.0.0 --port 8001 &
+          cd ..
+          cd notifications
+          uvicorn n_main:app --host 0.0.0.0 --port 8001 &
           cd ..
           sleep 5
           curl -f http://localhost:8000/health
@@ -81,8 +84,8 @@ jobs:
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: Dockerfile.aqua
+          context: ./aquacontrol
+          file: aquacontrol/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
 
