@@ -8,7 +8,7 @@ COPY aquacontrol/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем весь код основного сервиса из подпапки aquacontrol
-COPY . .
+COPY aquacontrol/ .
 
 # Убедимся, что есть __init__.py для корректных относительных импортов
 # (если его нет в вашей папке – создайте пустой файл)
