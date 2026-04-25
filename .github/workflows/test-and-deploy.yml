@@ -10,7 +10,6 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # 1. Тестирование
   test:
     runs-on: ubuntu-latest
     services:
@@ -51,7 +50,6 @@ jobs:
           curl -f http://localhost:8001/health
           echo "Smoke test passed"
 
-  # 2. Сборка и публикация образов
   build-and-deploy:
     needs: test
     if: github.ref == 'refs/heads/main'
@@ -60,7 +58,7 @@ jobs:
       contents: read
       packages: write
     env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}        # останутся пустыми, если секреты не заданы
+      SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
       SSH_KEY: ${{ secrets.SSH_KEY }}
 
@@ -68,7 +66,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Lowercase repo name
-        id: lower
         run: |
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "IMAGE_AQUA=${REPO_LOWER}-aqua" >> $GITHUB_ENV
@@ -98,7 +95,7 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
 
       - name: Deploy via SSH
-        if: ${{ env.SSH_HOST != '' }}          # выполняется только если задан секрет
+        if: ${{ env.SSH_HOST != '' }}
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ env.SSH_HOST }}
@@ -108,5 +105,4 @@ jobs:
             cd /opt/aquacontrol
             docker compose pull
             docker compose up -d --remove-orphans
-            docker system prune -f
             docker system prune -f
