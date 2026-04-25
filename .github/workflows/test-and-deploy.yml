@@ -8,11 +8,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Эти переменные будут переопределены в шаге "Lowercase repo name"
-  IMAGE_NAME_AQUA: placeholder
-  IMAGE_NAME_NOTIFY: placeholder
+  IMAGE_NAME_AQUA: ${{ github.repository }}-aqua        # строчные буквы гарантируем в шаге lower
+  IMAGE_NAME_NOTIFY: ${{ github.repository }}-notify
 
 jobs:
+  # 1. Тестирование
   test:
     runs-on: ubuntu-latest
     services:
@@ -36,7 +36,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r aquacontrol/requirements.txt
+          # основной сервис
+          pip install -r requirements.txt
+          # микросервис уведомлений (если у него свой requirements, иначе можно объединить)
           pip install -r notifications/requirements.txt
           pip install pytest pytest-asyncio httpx
 
@@ -45,17 +47,17 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
           NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
         run: |
-          cd aquacontrol
+          # запускаем основной сервис (лежит в корне)
           uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
-          cd ..
-          cd notifications
-          uvicorn n_main:app --host 0.0.0.0 --port 8001 &
+          # запускаем микросервис из папки notifications
+          cd notifications && uvicorn n_main:app --host 0.0.0.0 --port 8001 &
           cd ..
           sleep 5
           curl -f http://localhost:8000/health
           curl -f http://localhost:8001/health
           echo "Smoke test passed"
 
+  # 2. Сборка и публикация образов + деплой
   build-and-deploy:
     needs: test
     if: github.ref == 'refs/heads/main'
@@ -67,12 +69,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Lowercase repo name and set image names
+      - name: Lowercase repo name
         id: lower
         run: |
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "IMAGE_NAME_AQUA=${REPO_LOWER}/aqua" >> $GITHUB_ENV
-          echo "IMAGE_NAME_NOTIFY=${REPO_LOWER}/notify" >> $GITHUB_ENV
+          echo "IMAGE_AQUA=${REPO_LOWER}-aqua" >> $GITHUB_ENV
+          echo "IMAGE_NOTIFY=${REPO_LOWER}-notify" >> $GITHUB_ENV
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
@@ -84,21 +86,21 @@ jobs:
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: ./aquacontrol
-          file: aquacontrol/Dockerfile
+          context: .                           # корень репозитория
+          file: Dockerfile.aqua                # Dockerfile для основного сервиса
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_AQUA }}:latest
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
 
       - name: Build and push Notification image
         uses: docker/build-push-action@v5
         with:
-          context: ./notifications
-          file: notifications/Dockerfile
+          context: ./notifications             # папка notifications
+          file: notifications/Dockerfile        # Dockerfile для уведомлений
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_NOTIFY }}:latest
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
 
-      # Деплой (опционально, если не нужен – удалите следующие шаги)
       - name: Deploy via SSH
+        if: ${{ secrets.SSH_HOST != '' }}      # выполнится только если задан секрет
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.SSH_HOST }}
