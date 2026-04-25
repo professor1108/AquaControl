@@ -84,16 +84,16 @@ jobs:
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: .                           # контекст – корень репозитория
-          file: Dockerfile.aqua                # Dockerfile лежит в корне
+          context: .                           # корень, чтобы COPY aquacontrol/ сработал
+          file: aquacontrol/Dockerfile         # путь к Dockerfile внутри папки
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
 
       - name: Build and push Notification image
         uses: docker/build-push-action@v5
         with:
-          context: .                           # контекст – тоже корень
-          file: notifications/Dockerfile       # Dockerfile внутри папки notifications
+          context: .                           # корень
+          file: notifications/Dockerfile       # Dockerfile в папке notifications
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
 
