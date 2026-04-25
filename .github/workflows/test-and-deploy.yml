@@ -1,111 +1,78 @@
-name: Test and Deploy AquaControl
+name: two-stage-build-and-deploy
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 env:
+  # Регистр для финального образа (можно поменять на docker.io)
   REGISTRY: ghcr.io
+  # Название финального образа
+  IMAGE_NAME: myorg/myservice:latest
 
 jobs:
-  test:
+  # ---------- ПЕРВЫЙ ПЛАН: компиляция бинарника ----------
+  build-binary:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: user
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: aquadb
-        ports:
-          - 5432:5432
-        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Checkout исходный код микросервиса
+        uses: actions/checkout@v4
         with:
-          python-version: '3.11'
+          repository: myorg/microservice   # репозиторий с исходниками
+          path: source                     # положить в папку source
 
-      - name: Install dependencies
+      - name: Компиляция бинарника в Docker-контейнере
         run: |
-          pip install -r aquacontrol/requirements.txt
-          pip install -r notifications/requirements.txt
-          pip install pytest pytest-asyncio httpx
+          # Запускаем контейнер с нужной версией Go (или другого компилятора)
+          docker run --rm -v ${{ github.workspace }}/source:/app -w /app \
+            golang:1.21-alpine sh -c "go build -o /app/myapp ./cmd/server"
+          # Бинарник появится в source/myapp
 
-      - name: Smoke test
-        env:
-          DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
-          NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
-        run: |
-          cd aquacontrol
-          uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
-          cd ..
-          cd notifications
-          uvicorn n_main:app --host 0.0.0.0 --port 8001 &
-          cd ..
-          sleep 5
-          curl -f http://localhost:8000/health
-          curl -f http://localhost:8001/health
-          echo "Smoke test passed"
+      - name: Сохранить бинарник как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: myapp-binary
+          path: source/myapp
+          retention-days: 1
 
-  build-and-deploy:
-    needs: test
-    if: github.ref == 'refs/heads/main'
+  # ---------- ВТОРОЙ ПЛАН: сборка финального образа (с конфигами из другого репо) ----------
+  build-deploy-image:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}
-      SSH_USER: ${{ secrets.SSH_USER }}
-      SSH_KEY: ${{ secrets.SSH_KEY }}
-
+    needs: build-binary            # строгая зависимость от первого плана
     steps:
-      - uses: actions/checkout@v4
+      # 1. Скачать артефакт с бинарником
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: myapp-binary
+          path: ./binary
 
-      - name: Lowercase repo name
+      # 2. Клонировать второй репозиторий с конфигами и параметрами деплоя
+      - name: Checkout репозиторий конфигурации
+        uses: actions/checkout@v4
+        with:
+          repository: myorg/infrastructure   # другой репозиторий
+          path: configs
+
+      # 3. Подготовить структуру для Docker-образа
+      - name: Prepare Docker context
         run: |
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "IMAGE_AQUA=${REPO_LOWER}-aqua" >> $GITHUB_ENV
-          echo "IMAGE_NOTIFY=${REPO_LOWER}-notify" >> $GITHUB_ENV
+          mkdir -p docker-context/bin docker-context/etc
+          cp ./binary/myapp docker-context/bin/
+          cp ./configs/deploy/production.yaml docker-context/etc/
+          cp ./configs/docker/Dockerfile docker-context/
 
-      - name: Log in to Container Registry
+      # 4. Собрать и запушить финальный образ
+      - name: Login to Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # или токен для Docker Hub
 
-      - name: Build and push AquaControl image
+      - name: Build and push final image
         uses: docker/build-push-action@v5
         with:
-          context: .                           # корень, чтобы COPY aquacontrol/ сработал
-          file: aquacontrol/Dockerfile         # путь к Dockerfile внутри папки
+          context: ./docker-context
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
-
-      - name: Build and push Notification image
-        uses: docker/build-push-action@v5
-        with:
-          context: .                           # корень
-          file: notifications/Dockerfile       # Dockerfile в папке notifications
-          push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
-
-      - name: Deploy via SSH
-        if: ${{ env.SSH_HOST != '' }}
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ env.SSH_HOST }}
-          username: ${{ env.SSH_USER }}
-          key: ${{ env.SSH_KEY }}
-          script: |
-            cd /opt/aquacontrol
-            docker compose pull
-            docker compose up -d --remove-orphans
-            docker system prune -f
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
