@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AquaControl — Умный аквариум</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <h1>Умный аквариум</h1>
+            <span class="status-badge" id="systemStatus">● Онлайн</span>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="dashboard">
+            <!-- Параметры воды (в линию) -->
+            <section class="card parameters">
+                <h2>Параметры воды</h2>
+                <div class="sensors-row" id="sensors"></div>
+            </section>
+
+            <!-- Устройства и управление рядом -->
+            <div class="side-by-side">
+                <section class="card devices">
+                    <h2>Устройства</h2>
+                    <div id="devices"></div>
+                </section>
+                <section class="card controls">
+                    <h2>Управление</h2>
+                    <div class="control-group">
+                        <label>Температура</label>
+                        <div class="control-row">
+                            <input type="number" id="targetTemp" step="0.5" placeholder="25.0" value="25.0">
+                            <button id="setTempBtn" class="btn-primary">Установить</button>
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label>Кормление</label>
+                        <div class="control-row">
+                            <input type="number" id="portion" value="1.0" step="0.1" min="0.1" placeholder="г">
+                            <button id="feedBtn" class="btn-primary">Покормить</button>
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label>Освещение</label>
+                        <div class="control-row">
+                            <select id="lightMode">
+                                <option value="day">День</option>
+                                <option value="night">Ночь</option>
+                                <option value="storm">Шторм</option>
+                                <option value="plant_growth">Рост растений</option>
+                            </select>
+                            <button id="setLightBtn" class="btn-primary">Применить</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- История событий под ними -->
+            <section class="card events">
+                <h2>История событий</h2>
+                <ul id="events" class="event-list"></ul>
+            </section>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <span>© 2026 AquaControl — все параметры под контролем</span>
+    </footer>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
