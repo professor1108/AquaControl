@@ -1,78 +1,83 @@
-name: two-stage-build-and-deploy
+name: Two-Stage Build and Deploy
 
 on:
   push:
     branches: [ main ]
 
 env:
-  # Регистр для финального образа (можно поменять на docker.io)
   REGISTRY: ghcr.io
-  # Название финального образа
-  IMAGE_NAME: myorg/myservice:latest
+  FINAL_IMAGE_NAME: professor1108/aquacontrol-service:latest
 
 jobs:
-  # ---------- ПЕРВЫЙ ПЛАН: компиляция бинарника ----------
+  # ========== ЭТАП 1: Компиляция бинарного файла ==========
   build-binary:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout исходный код микросервиса
+      # Клонируем репозиторий с исходным кодом (ТЕКУЩИЙ репозиторий)
+      - name: Checkout source repository
         uses: actions/checkout@v4
         with:
-          repository: myorg/microservice   # репозиторий с исходниками
-          path: source                     # положить в папку source
+          repository: professor1108/AquaControl   # ИСПРАВЛЕНО: реальное имя
+          path: source
 
-      - name: Компиляция бинарника в Docker-контейнере
+      # Компиляция в Docker-контейнере (пример для Go, адаптируйте под свой язык)
+      - name: Compile binary in Docker
         run: |
-          # Запускаем контейнер с нужной версией Go (или другого компилятора)
-          docker run --rm -v ${{ github.workspace }}/source:/app -w /app \
-            golang:1.21-alpine sh -c "go build -o /app/myapp ./cmd/server"
-          # Бинарник появится в source/myapp
+          docker run --rm \
+            -v ${{ github.workspace }}/source:/app \
+            -w /app \
+            golang:1.21-alpine \
+            sh -c "go build -o myapp ./cmd/server"
 
-      - name: Сохранить бинарник как артефакт
+      # Сохраняем бинарник как артефакт для следующего этапа
+      - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: myapp-binary
           path: source/myapp
           retention-days: 1
 
-  # ---------- ВТОРОЙ ПЛАН: сборка финального образа (с конфигами из другого репо) ----------
+  # ========== ЭТАП 2: Сборка финального Docker-образа с конфигами ==========
   build-deploy-image:
     runs-on: ubuntu-latest
-    needs: build-binary            # строгая зависимость от первого плана
+    needs: build-binary
     steps:
-      # 1. Скачать артефакт с бинарником
+      # 1. Скачиваем бинарник, собранный на первом этапе
       - name: Download binary artifact
         uses: actions/download-artifact@v4
         with:
           name: myapp-binary
           path: ./binary
 
-      # 2. Клонировать второй репозиторий с конфигами и параметрами деплоя
-      - name: Checkout репозиторий конфигурации
+      # 2. Клонируем ВТОРОЙ репозиторий с конфигами и Dockerfile
+      #    Используем Personal Access Token (PAT) для доступа к приватному репозиторию
+      - name: Checkout config repository
         uses: actions/checkout@v4
         with:
-          repository: myorg/infrastructure   # другой репозиторий
+          repository: professor1108/AquaControl-deploy   # ИСПРАВЛЕНО: реальное имя
           path: configs
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}       # НЕОБХОДИМО: создать секрет с PAT
 
-      # 3. Подготовить структуру для Docker-образа
+      # 3. Готовим контекст для Docker-сборки (бинарник + конфиги)
       - name: Prepare Docker context
         run: |
           mkdir -p docker-context/bin docker-context/etc
           cp ./binary/myapp docker-context/bin/
-          cp ./configs/deploy/production.yaml docker-context/etc/
-          cp ./configs/docker/Dockerfile docker-context/
+          cp ./configs/production.yaml docker-context/etc/       # пример конфига
+          cp ./configs/Dockerfile docker-context/
 
-      # 4. Собрать и запушить финальный образ
-      - name: Login to Registry
+      # 4. Авторизуемся в GitHub Container Registry (или Docker Hub)
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}   # или токен для Docker Hub
+          password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 5. Собираем и публикуем финальный образ
       - name: Build and push final image
         uses: docker/build-push-action@v5
         with:
           context: ./docker-context
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: ${{ env.REGISTRY }}/${{ env.FINAL_IMAGE_NAME }}
