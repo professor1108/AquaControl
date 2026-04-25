@@ -7,8 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Используем имя владельца репозитория в нижнем регистре
-  OWNER_LOWER: professor1108
+  OWNER_LOWER: professor1108   # замените на свой логин в нижнем регистре
 
 jobs:
   build-and-push:
@@ -17,18 +16,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Log in to Container Registry (GHCR)
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Сборка основного сервиса AquaControl
+      # Сборка основного сервиса
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: ./aquacontrol
+          context: ./aquacontrol          # контекст — папка с сервисом
           file: ./aquacontrol/Dockerfile
           push: true
           tags: |
