@@ -8,11 +8,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME_AQUA: ${{ github.repository }}/aqua
-  IMAGE_NAME_NOTIFY: ${{ github.repository }}/notify
 
 jobs:
-  # ========== Тестирование ==========
   test:
     runs-on: ubuntu-latest
     services:
@@ -36,7 +33,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r aquacontrol/requirements.txt
+          pip install -r notifications/requirements.txt
           pip install pytest pytest-asyncio httpx
 
       - name: Smoke test
@@ -44,25 +42,37 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
           NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
         run: |
+          cd aquacontrol
           uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
-          sleep 5
+          cd ..
+          cd notifications
           uvicorn n_main:app --host 0.0.0.0 --port 8001 &
-          sleep 3
+          cd ..
+          sleep 5
           curl -f http://localhost:8000/health
           curl -f http://localhost:8001/health
           echo "Smoke test passed"
 
-  # ========== Сборка Docker-образов ==========
-  build:
+  build-and-deploy:
     needs: test
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Lowercase repo name
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_AQUA=${REPO_LOWER}-aqua" >> $GITHUB_ENV
+          echo "IMAGE_NOTIFY=${REPO_LOWER}-notify" >> $GITHUB_ENV
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
@@ -74,31 +84,26 @@ jobs:
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: Dockerfile.aqua
+          context: .                           # корень, чтобы COPY aquacontrol/ сработал
+          file: aquacontrol/Dockerfile         # путь к Dockerfile внутри папки
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_AQUA }}:latest
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
 
       - name: Build and push Notification image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: Dockerfile.notify
+          context: .                           # корень
+          file: notifications/Dockerfile       # Dockerfile в папке notifications
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_NOTIFY }}:latest
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
 
-  # ========== Деплой на сервер ==========
-  deploy:
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
       - name: Deploy via SSH
+        if: ${{ env.SSH_HOST != '' }}
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
           script: |
             cd /opt/aquacontrol
             docker compose pull
