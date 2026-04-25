@@ -3,94 +3,113 @@ name: Two-Stage Build and Deploy
 on:
   push:
     branches: [ main ]
+  # Также можно запускать вручную из интерфейса GitHub
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
+  # Замените на своё имя образа (будет push в ghcr.io/ваш_логин/имя_образа:latest)
   FINAL_IMAGE_NAME: professor1108/aquacontrol:latest
 
 jobs:
-  # ========== ЭТАП 1: Компиляция Go-бинарника ==========
+  # ============================================================
+  # ЭТАП 1: Компиляция бинарника (или подготовка артефакта)
+  # ============================================================
   build-binary:
     runs-on: ubuntu-latest
     steps:
+      # 1. Клонируем репозиторий с исходным кодом (убедитесь, что имя верное)
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
-          repository: professor1108/AquaControl
+          repository: professor1108/AquaControl   # ИСПРАВЬТЕ НА СВОЁ
           path: source
 
-      # Убедимся, что в репозитории есть go.mod
-      - name: List source files (debug)
-        run: ls -la source/
-
-      - name: Compile Go binary
+      # 2. Демонстрация: компиляция для Go (замените на свою команду)
+      #    Если у вас Python/Node.js – вы не компилируете бинарник,
+      #    а просто копируете исходники. Тогда замените этот шаг на упаковку.
+      - name: Compile binary (пример для Go)
         run: |
-          # Переходим в директорию с исходниками (если go.mod в корне source)
-          cd source
-          # Если ваш go.mod лежит в подпапке, например source/cmd/server, измените путь
-          # Пример: cd cmd/server
-          
-          # Запускаем сборку в Docker-контейнере, но БЕЗ записи в GITHUB_ENV внутри контейнера
+          # Проверяем, есть ли Docker
           docker run --rm \
             -v ${{ github.workspace }}/source:/app \
             -w /app \
             golang:1.21-alpine \
-            sh -c "go build -o myapp ."
-          
-          # Проверяем, создался ли бинарник (уже на раннере, не в контейнере)
+            sh -c "go build -o myapp ./cmd/server || echo 'COMPILE_FAILED=1' >> $GITHUB_ENV"
+          # Если компиляция не удалась – показываем содержимое папки для диагностики
           if [ ! -f source/myapp ]; then
-            echo "Ошибка: бинарник не создан"
+            echo "=== Ошибка: бинарник не создан. Содержимое source: ==="
             ls -la source/
             exit 1
           fi
 
-      - name: Upload binary artifact
+      # 3. Сохраняем результат как артефакт (бинарник или любые файлы)
+      - name: Upload artifact (binary)
         uses: actions/upload-artifact@v4
         with:
           name: app-binary
           path: source/myapp
           retention-days: 1
 
-  # ========== ЭТАП 2: Сборка финального образа ==========
+  # ============================================================
+  # ЭТАП 2: Сборка финального Docker-образа из другого репозитория
+  # ============================================================
   build-deploy-image:
     runs-on: ubuntu-latest
     needs: build-binary
     steps:
-      - name: Download binary
+      # 1. Загружаем артефакт (бинарник) с предыдущего этапа
+      - name: Download binary artifact
         uses: actions/download-artifact@v4
         with:
           name: app-binary
           path: ./binary
 
-      - name: Checkout config & Dockerfile repository
+      # 2. Клонируем ВТОРОЙ репозиторий (конфиги, Dockerfile)
+      #    ВАЖНО: этот репозиторий может быть приватным.
+      #    Используйте Personal Access Token с доступом к нему.
+      - name: Checkout config repository
         uses: actions/checkout@v4
         with:
-          repository: professor1108/AquaControl-deploy   # замените на ваш
+          repository: professor1108/AquaControl-deploy   # ИСПРАВЬТЕ НА СВОЙ
           path: configs
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}       # если репо приватный
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}       # СОЗДАЙТЕ ЭТОТ СЕКРЕТ
+          # Если репозиторий ПУБЛИЧНЫЙ – можно убрать строку token
 
+      # 3. Подготавливаем контекст сборки (бинарник + конфиги)
       - name: Prepare Docker context
         run: |
           mkdir -p docker-context/bin docker-context/etc
+          # Копируем бинарник
           cp ./binary/myapp docker-context/bin/
-          # Копируем конфиги (если есть)
+          # Копируем конфиг (пример – production.yaml, замените на свой)
           if [ -f configs/production.yaml ]; then
             cp configs/production.yaml docker-context/etc/
+          else
+            echo "WARNING: production.yaml not found, creating dummy"
+            echo "# dummy config" > docker-context/etc/config.yaml
           fi
+          # Копируем Dockerfile (обязательно должен существовать в configs/)
           cp configs/Dockerfile docker-context/
+          # Проверяем, что всё скопировалось
           ls -la docker-context/
 
-      - name: Login to GHCR
+      # 4. Логинимся в GitHub Container Registry (или Docker Hub)
+      - name: Log in to Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 5. Собираем и пушим финальный образ
       - name: Build and push final image
         uses: docker/build-push-action@v5
         with:
           context: ./docker-context
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.FINAL_IMAGE_NAME }}
+          # Добавляем metadata для лучшей отслеживаемости
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
