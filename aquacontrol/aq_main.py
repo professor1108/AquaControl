@@ -1,6 +1,7 @@
 import asyncio
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse          # ← добавлен импорт
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base, AsyncSessionLocal
 from routers import status, sensors, control, devices, events
@@ -26,6 +27,12 @@ app.include_router(control.router)
 app.include_router(devices.router)
 app.include_router(events.router)
 
+# ---------- Добавленный обработчик корневого пути ----------
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/static/index.html")
+# ----------------------------------------------------------
+
 # Статические файлы (фронтенд)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -37,14 +44,14 @@ async def startup():
 
     # Предварительное создание устройств, если их нет
     async with AsyncSessionLocal() as db:
-        devices = [
+        devices_list = [
             ("Нагреватель", "heater"),
             ("Фильтр", "filter"),
             ("Кормушка", "feeder"),
             ("Освещение", "light"),
             ("Аэратор", "aerator")
         ]
-        for name, dtype in devices:
+        for name, dtype in devices_list:
             exists = (await db.execute(select(Device).where(Device.name == name))).scalar_one_or_none()
             if not exists:
                 dev = Device(name=name, type=dtype, status=False, power=None, mode=None)
