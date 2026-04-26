@@ -1,11 +1,16 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 import logging
+from metrics import MetricsMiddleware, get_metrics
+from logging_config import setup_logging
 
-logging.basicConfig(level=logging.INFO)
+setup_logging("notifications")
+VERSION = "1.0.0"
+
+app = FastAPI(title="Notification Service", version=VERSION)
+app.add_middleware(MetricsMiddleware)
+
 logger = logging.getLogger(__name__)
-
-app = FastAPI(title="Notification Service", version="1.0")
 
 class Notification(BaseModel):
     event_type: str
@@ -13,14 +18,16 @@ class Notification(BaseModel):
 
 @app.post("/notify")
 async def notify(notification: Notification):
-    # В реальном проекте здесь отправка Telegram/email/SMS
     logger.info(f"Received notification: {notification.event_type} - {notification.description}")
-    # Имитация отправки (всегда успешно)
     return {"status": "delivered"}
+
+@app.get("/stats")
+async def stats():
+    return get_metrics(VERSION)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": VERSION}
 
 if __name__ == "__main__":
     import uvicorn
