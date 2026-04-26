@@ -41,6 +41,7 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
           NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
+          # Для теста не нужны ES и Kibana
         run: |
           cd aquacontrol
           uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
@@ -51,6 +52,7 @@ jobs:
           sleep 5
           curl -f http://localhost:8000/health
           curl -f http://localhost:8001/health
+          curl -f http://localhost:8000/stats   # проверяем эндпоинт stats
           echo "Smoke test passed"
 
   build-and-deploy:
@@ -65,10 +67,17 @@ jobs:
       SSH_USER: ${{ secrets.SSH_USER }}
       SSH_KEY: ${{ secrets.SSH_KEY }}
       SSH_FINGERPRINT: ${{ secrets.SSH_FINGERPRINT }}
-      GHCR_PAT: ${{ secrets.GHCR_PAT }}
 
     steps:
       - uses: actions/checkout@v4
+
+      # Логин в GHCR на уровне runner (для сборки и пуша)
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Lowercase repo name
         run: |
@@ -76,29 +85,27 @@ jobs:
           echo "IMAGE_AQUA=${REPO_LOWER}-aqua" >> $GITHUB_ENV
           echo "IMAGE_NOTIFY=${REPO_LOWER}-notify" >> $GITHUB_ENV
 
-      - name: Log in to Container Registry (runner)
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: aquacontrol/Dockerfile
+          context: ./aquacontrol           # контекст – папка с сервисом
+          file: ./aquacontrol/Dockerfile   # можно опустить, т.к. Dockerfile там же
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:${{ github.sha }}
 
       - name: Build and push Notification image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: notifications/Dockerfile
+          context: ./notifications
+          file: ./notifications/Dockerfile
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:${{ github.sha }}
 
+      # Деплой на удалённый сервер через SSH
       - name: Deploy via SSH
         if: ${{ env.SSH_HOST != '' && env.SSH_FINGERPRINT != '' }}
         uses: appleboy/ssh-action@v1.0.0
@@ -107,15 +114,29 @@ jobs:
           username: ${{ env.SSH_USER }}
           key: ${{ env.SSH_KEY }}
           fingerprint: ${{ env.SSH_FINGERPRINT }}
+          script_stop: true
           script: |
             set -e
-            if [ ! -d /opt/aquacontrol ]; then
-              echo "Ошибка: директория /opt/aquacontrol не найдена"
-              exit 1
-            fi
-            cd /opt/aquacontrol
+            cd /opt/aquacontrol   # предполагаемая рабочая директория на сервере
+
+            # Логин в GHCR (используем секрет GHCR_PAT)
             echo "${{ secrets.GHCR_PAT }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-            docker compose pull
-            docker compose up -d --remove-orphans
+
+            # Подтягиваем образы наших сервисов
+            docker compose pull aquacontrol notifications
+
+            # Пересоздаём контейнеры с новыми образами (остальные сервисы перезапустятся при необходимости)
+            docker compose up -d --remove-orphans --no-deps aquacontrol notifications
+
+            # Опционально перезапустить весь стек, если нужно обновить network или volumes
+            # docker compose up -d
+
             docker system prune -f
             docker logout ${{ env.REGISTRY }}
+
+            # Проверка, что сервисы и ELK работают (необязательно, но полезно)
+            sleep 10
+            curl -f http://localhost:8000/health || echo "AquaControl health failed"
+            curl -f http://localhost:8001/health || echo "Notifications health failed"
+            curl -f http://localhost:9200/_cluster/health || echo "Elasticsearch not ready"
+            echo "Deployment finished"
