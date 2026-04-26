@@ -1,0 +1,18 @@
+metricbeat.modules:
+  - module: http
+    metricsets: ["json"]
+    period: 30s
+    hosts: ["http://aquacontrol:8000", "http://notifications:8001"]
+    namespace: "stats"
+    path: "/stats"
+    method: "GET"
+    request.enabled: false
+    response.enabled: true
+    json.keys_under_root: true
+
+output.elasticsearch:
+  hosts: ['${ELASTICSEARCH_HOSTS:http://elasticsearch:9200}']
+  index: "aquacontrol-stats-%{+yyyy.MM.dd}"
+
+setup.template.name: "aquacontrol-stats"
+setup.template.pattern: "aquacontrol-stats-*"

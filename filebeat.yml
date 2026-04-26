@@ -1,0 +1,18 @@
+filebeat.inputs:
+  - type: container
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    processors:
+      - add_docker_metadata: ~
+      - decode_json_fields:
+          fields: ["message"]
+          target: "json"
+          overwrite_keys: true
+
+output.elasticsearch:
+  hosts: ['${ELASTICSEARCH_HOSTS:http://elasticsearch:9200}']
+  index: "aquacontrol-logs-%{+yyyy.MM.dd}"
+
+setup.template.name: "aquacontrol-logs"
+setup.template.pattern: "aquacontrol-logs-*"
+logging.level: info
