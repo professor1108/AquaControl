@@ -1,4 +1,7 @@
 import asyncio
+import os
+import time
+import aiohttp
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
@@ -8,19 +11,15 @@ from routers import status, sensors, control, devices, events
 import tasks
 from sqlalchemy import select
 from models import Device
-from metrics import MetricsMiddleware, get_metrics   # <-- добавлено
-from logging_config import setup_logging             # <-- добавлено
+from metrics import MetricsMiddleware, get_metrics
+from logging_config import setup_logging
 
-# Настройка JSON-логирования
 setup_logging("aquacontrol")
-
 VERSION = "1.0.0"
-app = FastAPI(title="AquaControl", version=VERSION)
 
-# Middleware для сбора метрик запросов
+app = FastAPI(title="AquaControl", version=VERSION)
 app.add_middleware(MetricsMiddleware)
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,22 +28,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключение роутеров
 app.include_router(status.router)
 app.include_router(sensors.router)
 app.include_router(control.router)
 app.include_router(devices.router)
 app.include_router(events.router)
 
-# Редирект с корня на статику
 @app.get("/")
 async def root():
     return RedirectResponse(url="/static/index.html")
 
-# Статические файлы
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ---- Эндпоинты для мониторинга ----
 @app.get("/stats")
 async def stats():
     return get_metrics(VERSION)
@@ -52,7 +47,19 @@ async def stats():
 @app.get("/health")
 async def health():
     return {"status": "healthy", "version": VERSION}
-# -----------------------------------
+
+# Фоновая отправка метрик в Elasticsearch
+async def send_stats_to_elastic():
+    es_host = os.getenv("ES_HOST", "http://elasticsearch:9200")
+    while True:
+        await asyncio.sleep(30)
+        data = get_metrics(VERSION)
+        data['timestamp'] = time.time()
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(f"{es_host}/aquacontrol-stats/_doc", json=data)
+        except Exception as e:
+            print(f"Failed to send stats to ES: {e}")
 
 @app.on_event("startup")
 async def startup():
@@ -75,6 +82,7 @@ async def startup():
         await db.commit()
 
     asyncio.create_task(tasks.simulate_sensors())
+    asyncio.create_task(send_stats_to_elastic())
 
 @app.get("/metrics")
 async def metrics():
