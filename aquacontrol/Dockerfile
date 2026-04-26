@@ -2,17 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Копируем только requirements.txt сначала (для кэширования слоёв)
+# Копируем requirements из подпапки aquacontrol
 COPY aquacontrol/requirements.txt .
-
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем весь код основного сервиса из подпапки aquacontrol
+# Копируем весь код из подпапки aquacontrol
 COPY aquacontrol/ .
 
-# Убедимся, что есть __init__.py для корректных относительных импортов
-# (если его нет в вашей папке – создайте пустой файл)
-RUN touch /app/__init__.py
+RUN adduser --disabled-password --gecos '' --uid 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8000
 
