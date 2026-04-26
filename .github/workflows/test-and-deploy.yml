@@ -63,7 +63,9 @@ jobs:
     env:
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
-      SSH_KEY: ${{ secrets.SSH_KEY }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}               # приватный ключ (новый, безопасный)
+      SSH_FINGERPRINT: ${{ secrets.SSH_FINGERPRINT }}
+      GHCR_PAT: ${{ secrets.GHCR_PAT }}
 
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +76,7 @@ jobs:
           echo "IMAGE_AQUA=${REPO_LOWER}-aqua" >> $GITHUB_ENV
           echo "IMAGE_NOTIFY=${REPO_LOWER}-notify" >> $GITHUB_ENV
 
-      - name: Log in to Container Registry
+      - name: Log in to Container Registry (runner)
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -84,28 +86,156 @@ jobs:
       - name: Build and push AquaControl image
         uses: docker/build-push-action@v5
         with:
-          context: .                           # корень, чтобы COPY aquacontrol/ сработал
-          file: aquacontrol/Dockerfile         # путь к Dockerfile внутри папки
+          context: .
+          file: aquacontrol/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
 
       - name: Build and push Notification image
         uses: docker/build-push-action@v5
         with:
-          context: .                           # корень
-          file: notifications/Dockerfile       # Dockerfile в папке notifications
+          context: .
+          file: notifications/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
 
       - name: Deploy via SSH
-        if: ${{ env.SSH_HOST != '' }}
+        if: ${{ env.SSH_HOST != '' && env.SSH_FINGERPRINT != '' }}
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
           key: ${{ env.SSH_KEY }}
+          fingerprint: ${{ env.SSH_FINGERPRINT }}
           script: |
+            set -e
+            if [ ! -d /opt/aquacontrol ]; then
+              echo "Ошибка: директория /opt/aquacontrol не найдена"
+              exit 1
+            fi
             cd /opt/aquacontrol
+            echo "${{ secrets.GHCR_PAT }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
             docker compose pull
             docker compose up -d --remove-orphans
             docker system prune -f
+            docker logout ${{ env.REGISTRY }}name: Test and Deploy AquaControl
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: aquadb
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r aquacontrol/requirements.txt
+          pip install -r notifications/requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Smoke test
+        env:
+          DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/aquadb
+          NOTIFICATION_SERVICE_URL: http://localhost:8001/notify
+        run: |
+          cd aquacontrol
+          uvicorn aq_main:app --host 0.0.0.0 --port 8000 &
+          cd ..
+          cd notifications
+          uvicorn n_main:app --host 0.0.0.0 --port 8001 &
+          cd ..
+          sleep 5
+          curl -f http://localhost:8000/health
+          curl -f http://localhost:8001/health
+          echo "Smoke test passed"
+
+  build-and-deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}               # приватный ключ (новый, безопасный)
+      SSH_FINGERPRINT: ${{ secrets.SSH_FINGERPRINT }}
+      GHCR_PAT: ${{ secrets.GHCR_PAT }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase repo name
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_AQUA=${REPO_LOWER}-aqua" >> $GITHUB_ENV
+          echo "IMAGE_NOTIFY=${REPO_LOWER}-notify" >> $GITHUB_ENV
+
+      - name: Log in to Container Registry (runner)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push AquaControl image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: aquacontrol/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_AQUA }}:latest
+
+      - name: Build and push Notification image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: notifications/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NOTIFY }}:latest
+
+      - name: Deploy via SSH
+        if: ${{ env.SSH_HOST != '' && env.SSH_FINGERPRINT != '' }}
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          fingerprint: ${{ env.SSH_FINGERPRINT }}
+          script: |
+            set -e
+            if [ ! -d /opt/aquacontrol ]; then
+              echo "Ошибка: директория /opt/aquacontrol не найдена"
+              exit 1
+            fi
+            cd /opt/aquacontrol
+            echo "${{ secrets.GHCR_PAT }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker system prune -f
+            docker logout ${{ env.REGISTRY }}
